@@ -14,3 +14,6 @@ On building
   <dt>step 3</dt>
   <dd>you can `make run` to start qemu.but one thing i need to recomand you this is when you frist start qemu you must add `BOOT=1`</dd>
 </dl>
+
+## pci device [1a03 2000]
+![lspci](/Pic/lspci.png "lspci")
