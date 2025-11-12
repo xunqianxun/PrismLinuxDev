@@ -1,0 +1,26 @@
+# Visual Studio cache/options directory
+.vs/
+
+# Visual Studio Code directory
+.vscode/
+
+# Clangd directory
+.cache
+compile_commands.json
+
+# image or binary files and disks
+*.iso
+*.img
+*.bin
+*.log
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+build/
+bld/
+[Bb]in/
+[Oo]bj/
+_logs
