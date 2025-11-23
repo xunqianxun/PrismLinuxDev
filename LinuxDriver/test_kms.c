@@ -28,8 +28,30 @@ static void prism_plane_atomic_update(struct drm_plane *plane,
     struct prism_device *pdev = to_prism_dev(plane->dev);
     struct prism_bo *bo;
     uint32_t offset;
+    uint32_t hw_format_val;
+    struct drm_framebuffer *fb = new_state->fb;
+    uint32_t drm_fmt = fb->format->format;
 
     if (!new_state->fb) return;
+
+    switch (drm_fmt) {
+    case DRM_FORMAT_XRGB8888:
+    case DRM_FORMAT_ARGB8888:
+        /* 对应 QEMU/Pixman 的 PIXMAN_x8r8g8b8 (32bpp) */
+        /* 如果你不知道具体值，通常是 0x20028888，或者查看你的硬件文档 */
+        hw_format_val = 0x20028888; 
+        break;
+
+    case DRM_FORMAT_RGB565:
+        /* 对应 QEMU/Pixman 的 PIXMAN_r5g6b5 (16bpp) */
+        hw_format_val = 0x20020888;
+        break;
+
+    default:
+        /* 理论上不应该走到这里，因为 init 时我们限制了支持列表 */
+        dev_warn(pdev->drm.dev, "Unsupported format: 0x%x\n", drm_fmt);
+        return;
+    }
 
     /* 获取当前要显示的 BO */
     bo = to_prism_bo(to_ttm_bo(new_state->fb->obj[0]));
@@ -40,13 +62,30 @@ static void prism_plane_atomic_update(struct drm_plane *plane,
      */
     offset = bo->tbo.resource->start << PAGE_SHIFT;
 
-    /* 真正的硬件操作：告诉显卡去哪里读数据 */
-    /* 写入 VRAM 偏移量 */
-    prism_write_reg(pdev, PRISM_REG_START, offset);
-    /* 写入跨距 (Stride) */
-    prism_write_reg(pdev, PRISM_REG_STRIDE, new_state->fb->pitches[0]);
+    /* 0x00: FORMAT */
+    prism_write_reg(pdev, PRISM_REG_FORMAT, hw_format_val);
     
-    /* 可选：如果支持硬件缩放，还要写 src_w, src_h, crtc_w, crtc_h 等 */
+    /* 0x04: BYTEPP (Bytes Per Pixel) */
+    /* cpp[0] 是 DRM 计算好的每像素字节数，XRGB8888 是 4 */
+    prism_write_reg(pdev, PRISM_REG_BYTEPP, fb->format->cpp[0]);
+    
+    /* 0x08: WIDTH */
+    prism_write_reg(pdev, PRISM_REG_WIDTH, fb->width);
+    
+    /* 0x0C: HEIGHT */
+    prism_write_reg(pdev, PRISM_REG_HEIGHT, fb->height);
+    
+    /* 0x10: STRIDE (Pitch) */
+    /* 一行像素占用的字节数，包含对齐填充 */
+    prism_write_reg(pdev, PRISM_REG_STRIDE, fb->pitches[0]);
+    
+    /* 0x14: OFFSET */
+    /* 告诉硬件从 VRAM 的哪里开始读图 */
+    prism_write_reg(pdev, PRISM_REG_OFFSET, offset);
+
+    /* 0x28: SIZE */
+    /* 整个 Buffer 的大小，用于硬件边界检查 */
+    prism_write_reg(pdev, PRISM_REG_SIZE, bo->tbo.base.size);
 }
 
 
@@ -71,18 +110,13 @@ static void prism_crtc_atomic_enable(struct drm_crtc *crtc,
                                      struct drm_atomic_state *state)
 {
     struct prism_device *pdev = to_prism_dev(crtc->dev);
-    
-    /* 写寄存器：开启显示引擎 */
-    prism_write_reg(pdev, PRISM_REG_ENABLE, 1);
+
 }
 
 static void prism_crtc_atomic_disable(struct drm_crtc *crtc,
                                       struct drm_atomic_state *state)
 {
     struct prism_device *pdev = to_prism_dev(crtc->dev);
-    
-    /* 写寄存器：关闭显示引擎 */
-    prism_write_reg(pdev, PRISM_REG_ENABLE, 0);
     
     /* 必须调用，通知 DRM 这一帧结束了，否则会卡死 */
     drm_crtc_vblank_off(crtc);
@@ -135,10 +169,25 @@ static const struct drm_connector_funcs prism_conn_funcs = {
     .atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
 
+static const struct drm_mode_config_funcs prism_mode_config_funcs = {
+    .fb_create = drm_gem_fb_create,      
+    .atomic_check = drm_atomic_helper_check,
+    .atomic_commit = drm_atomic_helper_commit,
+};
+
 int prism_modeset_init(struct prism_device *pdev)
 {
     struct drm_device *dev = &pdev->drm;
     int ret;
+
+    /* 必须设置，否则 DRM 不知道显卡支持多大的分辨率 */
+    dev->mode_config.min_width = 64;
+    dev->mode_config.min_height = 64;
+    dev->mode_config.max_width = 4096;
+    dev->mode_config.max_height = 4096;
+    
+    /* 需要一个简单的 helper funcs */
+    dev->mode_config.funcs = &prism_mode_config_funcs;
 
     /* 1. 初始化 Primary Plane */
     ret = drm_universal_plane_init(dev, &pdev->primary_plane,

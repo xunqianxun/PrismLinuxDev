@@ -111,9 +111,6 @@ static int prism_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent
     dev_info(&pdev->dev, "Mapped VRAM at %p (phys %llx), MMIO at %p\n",
              prism->vram_virt, prism->vram_base_phys, prism->mmio_virt);
 
-    /* 读取一下 Hardware Signature 验证映射是否成功 */
-    dev_info(&pdev->dev, "Prism HW Signature: 0x%08x\n", 
-             ioread32(&prism->mmio_virt->signature));
 
     /* ---------------------------------------------------
      * TTM 初始化

@@ -19,7 +19,7 @@
 
 #define TYPE_PRISM_SIM "prism-sim"
 
-#define PCI_PRISM_MMIO_SIZE     0x1000
+#define PCI_PRISM_MMIO_SIZE     0x40
 
 #define PRISM_REGISTER_SIZE   4*16  //16个寄存器，每个寄存器4字节
 #define PRISM_SIM_REG_NUMBER 15

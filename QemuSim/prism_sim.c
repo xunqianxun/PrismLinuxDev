@@ -178,7 +178,7 @@ static void prism_sim_realize(PCIDevice *dev, Error **errp)
                           s, "prism-sim.mode-reg", PRISM_REGISTER_SIZE);
     memory_region_add_subregion(&s->mmio, PRISM_SIM_REG_OFFSET, &s->preg);
 
-    pci_register_bar(&s->pci, 1, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->mmio);
+    pci_register_bar(&s->pci, 2, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->mmio);
     if (pci_bus_is_express(pci_get_bus(dev))) {
         ret = pcie_endpoint_cap_init(dev, 0x80); //为了尽可能模拟真实硬件，能力列表为0x40-0xFF
         assert(ret > 0);
