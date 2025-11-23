@@ -138,11 +138,11 @@ static void prism_sim_mode_reg_write(void *opaque,
 static const MemoryRegionOps prism_sim_mode_reg_ops = {
     .read = prism_sim_mode_reg_read,
     .write = prism_sim_mode_reg_write,
-    .valid.min_access_size = 1,
-    .valid.max_access_size = 4,
-    .impl.min_access_size = 4,
-    .impl.max_access_size = 4,
-    .endianness = DEVICE_LITTLE_ENDIAN,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+    },
 };
 
 
@@ -166,13 +166,12 @@ static void prism_sim_realize(PCIDevice *dev, Error **errp)
         return;
     }
     pci_register_bar(&s->pci, 0, PCI_BASE_ADDRESS_SPACE_MEMORY 
-                                | PCI_BASE_ADDRESS_MEM_TYPE_32 
+                                | PCI_BASE_ADDRESS_MEM_TYPE_64 
                                 | PCI_BASE_ADDRESS_MEM_PREFETCH, &s->vram);
 
 
     /* mmio */
-    memory_region_init_io(&s->mmio, obj, &unassigned_io_ops,
-                          s, "prism-sim.mmio", PCI_PRISM_MMIO_SIZE);
+    memory_region_init(&s->mmio, obj, "prism-sim.mmio", PCI_PRISM_MMIO_SIZE);
 
     memory_region_init_io(&s->preg, obj, &prism_sim_mode_reg_ops,
                           s, "prism-sim.mode-reg", PRISM_REGISTER_SIZE);
@@ -254,7 +253,7 @@ static void prism_sim_init(Object *obj){
     PCIDevice *dev = PCI_DEVICE(obj);
     PrismSimState *s = PRISM_SIM(dev);
 
-    s->vgamem = 16 * MiB; //default vram size
+    s->vgamem = 64 * MiB; //default vram size
 
     dev->cap_present |= QEMU_PCI_CAP_EXPRESS;
 
