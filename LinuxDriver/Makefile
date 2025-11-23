@@ -2,7 +2,7 @@ MAKEFLAGS += --no-print-directory
 
 MODULE_NAME := prism-drv
 
-$(MODULE_NAME)-objs := prism.o
+$(MODULE_NAME)-objs := test_drv.o test_kms.o test_gem.o test_object.o test_ttm.o
 
 obj-m += $(MODULE_NAME).o
 
