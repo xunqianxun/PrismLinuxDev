@@ -3,7 +3,7 @@ MODULE_NAME := prism-drv
 
 # 模块由哪些对象文件组成
 # 这里将 prism.c 编译为 prism.o，最终链接成 prism-drv.ko
-$(MODULE_NAME)-y := prism.o
+$(MODULE_NAME)-y := prism_drv.o prism_plane.o
 obj-m += $(MODULE_NAME).o
 
 # 内核构建目录

@@ -17,99 +17,6 @@
 #include <drm/drm_aperture.h>
 #include <drm/drm_fb_helper.h>
 
-/* ------------------------------------------------------------------
- * 1. 硬件寄存器定义 (BAR 2)
- * ------------------------------------------------------------------ */
-#define PRISM_REG_FORMAT    0x00
-#define PRISM_REG_BYTEPP    0x04
-#define PRISM_REG_WIDTH     0x08
-#define PRISM_REG_HEIGHT    0x0C
-#define PRISM_REG_STRIDE    0x10
-#define PRISM_REG_OFFSET    0x14
-#define PRISM_REG_SIZE      0x18
-#define PRISM_REG_START     0x1c
-
-static const u32 prism_plane_formats[] = {
-    DRM_FORMAT_XRGB8888,
-    DRM_FORMAT_ARGB8888,
-};
-
-#define PRISM_FMT_XRGB8888  0x20020888
-#define PRISM_FMT_ARGB8888  0x20028888
-
-struct prism_device {
-    struct drm_device drm;
-    void __iomem *mmio;
-};
-
-struct prism_plane {
-    struct drm_plane base;
-};
-
-#define to_prism(dev) container_of(dev, struct prism_device, drm)
-
-/* ------------------------------------------------------------------
- * 2. 显示管道 (Plane/CRTC/Encoder)
- * ------------------------------------------------------------------ */
-
-static void prism_primary_atomic_update(struct drm_plane *plane,
-                                        struct drm_atomic_state *state)
-{
-    struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-    struct prism_device *pdev = to_prism(plane->dev);
-    struct drm_framebuffer *fb = new_state->fb;
-    struct drm_gem_vram_object *gbo;
-    u64 vram_offset;
-    u32 hw_fmt;
-
-    if (!fb)  
-
-    gbo = drm_gem_vram_of_gem(fb->obj[0]);
-    vram_offset = drm_gem_vram_offset(gbo);
-    
-    if ((s64)vram_offset < 0) { /* [FIXED] 显式转换类型以进行负数检查 */
-        return;
-    }
-
-    switch (fb->format->format) {
-    case DRM_FORMAT_XRGB8888: hw_fmt = PRISM_FMT_XRGB8888; break;
-    case DRM_FORMAT_ARGB8888: hw_fmt = PRISM_FMT_ARGB8888; break;
-    default: hw_fmt = PRISM_FMT_XRGB8888; break;
-    }
-
-    iowrite32(hw_fmt,           pdev->mmio + PRISM_REG_FORMAT);
-    iowrite32(fb->format->cpp[0], pdev->mmio + PRISM_REG_BYTEPP);
-    iowrite32(fb->width,        pdev->mmio + PRISM_REG_WIDTH);
-    iowrite32(fb->height,       pdev->mmio + PRISM_REG_HEIGHT);
-    iowrite32(fb->pitches[0],   pdev->mmio + PRISM_REG_STRIDE);
-    iowrite32((u32)vram_offset, pdev->mmio + PRISM_REG_OFFSET);
-    iowrite32(gbo->bo.base.size, pdev->mmio + PRISM_REG_SIZE);
-    iowrite32(1,   pdev->mmio + PRISM_REG_START);
-}
-
-static int prism_plane_atomic_check(struct drm_plane *plane,
-                                    struct drm_atomic_state *state)
-{
-    struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state, plane);
-    struct drm_crtc_state *new_crtc_state;
-
-    if (!new_plane_state->crtc)
-        return 0;
-
-    new_crtc_state = drm_atomic_get_new_crtc_state(state, new_plane_state->crtc);
-    
-    return drm_atomic_helper_check_plane_state(new_plane_state, new_crtc_state,
-                                                  (1 << 16), 
-                                                  (1 << 16),
-                                                  false, true);
-}
-
-static const struct drm_plane_helper_funcs prism_primary_helper_funcs = {
-    .prepare_fb = drm_gem_vram_plane_helper_prepare_fb,
-    .cleanup_fb = drm_gem_vram_plane_helper_cleanup_fb,
-    .atomic_check = prism_plane_atomic_check,
-    .atomic_update = prism_primary_atomic_update,
-};
 
 static const struct drm_plane_funcs prism_primary_funcs = {
     .update_plane = drm_atomic_helper_update_plane,
@@ -203,15 +110,12 @@ static struct drm_driver prism_driver = {
     .dumb_create = drm_gem_vram_driver_dumb_create,
 };
 
-/* ------------------------------------------------------------------
- * 4. 初始化逻辑 (兼容性修复版)
- * ------------------------------------------------------------------
- */
+
 static int prism_modeset_init(struct prism_device *pdev)
 {
     struct drm_device *dev = &pdev->drm;
-    struct drm_plane *primary;
-    struct prism_plane *p_plane;
+    struct drm_plane *primary, *cursor;
+    struct prism_plane *priplane, *overplane = NULL, *cursorplane = NULL;
     struct drm_crtc *crtc;
     struct drm_encoder *encoder;
     struct drm_connector *connector;
@@ -233,29 +137,20 @@ static int prism_modeset_init(struct prism_device *pdev)
         return ret;
     }
 
-    /* * 2. [FIX] 手动分配并初始化 Plane 
-     * 替代 drmm_plane_alloc (因为旧内核不支持)
-     */
-    p_plane = devm_kzalloc(dev->dev, sizeof(*p_plane), GFP_KERNEL);
-    if (!p_plane) return -ENOMEM;
-    
-    primary = &p_plane->base;
+    priplane = prism_plane_init(pdev, DRM_PLANE_TYPE_PRIMARY, 0); // this index set zero because only one CRTC
+	if (IS_ERR(priplane))
+		return PTR_ERR(priplane);
+    primary = &priplane->base;
 
-    /* 使用通用的初始化函数 */
-    ret = drm_universal_plane_init(dev, primary, 
-                                   1, /* possible_crtcs (1 << 0) */
-                                   &prism_primary_funcs,
-                                   prism_plane_formats, 
-                                   ARRAY_SIZE(prism_plane_formats),
-                                   NULL, 
-                                   DRM_PLANE_TYPE_PRIMARY, 
-                                   "primary");
-    if (ret) {
-        DRM_ERROR("Failed to init plane: %d\n", ret);
-        return ret;
-    }
+	overplane = prism_plane_init(pdev, DRM_PLANE_TYPE_OVERLAY, 0);
+	if (IS_ERR(overplane))
+		return PTR_ERR(overplane);
     
-    drm_plane_helper_add(primary, &prism_primary_helper_funcs);
+	cursorplane = prism_plane_init(pdev, DRM_PLANE_TYPE_CURSOR, 0);
+	if (IS_ERR(cursorplane))
+		return PTR_ERR(cursorplane);
+    cursor = &cursorplane->base;
+
 
 
     crtc = devm_kzalloc(dev->dev, sizeof(*crtc), GFP_KERNEL);
@@ -263,7 +158,7 @@ static int prism_modeset_init(struct prism_device *pdev)
 
     /* 使用基础初始化函数，显式传递名称 "crtc-0" 防止 NULL 崩溃 */
     ret = drm_crtc_init_with_planes(dev, crtc,
-                                    primary, NULL, /* cursor plane = NULL */
+                                    primary, cursor, 
                                     &prism_crtc_funcs,
                                     "crtc-0");
     if (ret) {
@@ -271,6 +166,11 @@ static int prism_modeset_init(struct prism_device *pdev)
         return ret;
     }
     drm_crtc_helper_add(crtc, &prism_crtc_helper_funcs);
+
+
+    if (!overplane->base.possible_crtcs)
+		overplane->base.possible_crtcs = drm_crtc_mask(crtc);
+
 
     /* 4. 初始化 Encoder */
     encoder = drmm_encoder_alloc(dev, struct drm_encoder, dev,
@@ -306,6 +206,10 @@ static int prism_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent
     struct drm_device *ddev;
     int ret;
 
+    ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, &prism_driver);
+	if (ret)
+	return ret;
+
     /* 1. Alloc Device */
     prism = devm_drm_dev_alloc(&pdev->dev, &prism_driver, struct prism_device, drm);
     if (IS_ERR(prism)) return PTR_ERR(prism);
@@ -317,7 +221,6 @@ static int prism_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent
 
     /* 2. Map BAR 2 (MMIO) */
     prism->mmio = pcim_iomap(pdev, 2, 0);
-    printk("mmio:%lx",prism->mmio);
     if (!prism->mmio) {
         DRM_ERROR("Failed to map BAR 2\n");
         return -ENOMEM;
@@ -326,8 +229,6 @@ static int prism_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent
     /* 3. Init VRAM (BAR 0) */
     resource_size_t vram_base = pci_resource_start(pdev, 0);
     resource_size_t vram_len = pci_resource_len(pdev, 0);
-    printk("vram_base:%lx",vram_base);
-    printk("vram_len:%ld",vram_len);
 
     /* [FIXED] 增加基本的校验，防止 BAR 0 没配置导致恐慌 */
     if (vram_len == 0) {
