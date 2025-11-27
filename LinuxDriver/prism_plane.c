@@ -38,6 +38,7 @@ static void prism_primary_atomic_update(struct drm_plane *plane,
     u32 hw_fmt;
 
     if (!fb)  
+		return;
 
     gbo = drm_gem_vram_of_gem(fb->obj[0]);
     vram_offset = drm_gem_vram_offset(gbo);
@@ -89,79 +90,12 @@ static const struct drm_plane_helper_funcs prism_primary_helper_funcs = {
 static const struct drm_plane_funcs prism_plane_funcs = {
     .update_plane = drm_atomic_helper_update_plane,
     .disable_plane = drm_atomic_helper_disable_plane,
-    .destroy = drm_plane_cleanup,
     .reset = drm_atomic_helper_plane_reset,
     .atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
     .atomic_destroy_state = drm_atomic_helper_plane_destroy_state,
 };
 
 
-static void vkms_plane_atomic_update(struct drm_plane *plane,
-				     struct drm_atomic_state *state)
-{
-	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state,
-									   plane);
-	struct vkms_plane_state *vkms_plane_state;
-	struct drm_shadow_plane_state *shadow_plane_state;
-	struct drm_framebuffer *fb = new_state->fb;
-	struct vkms_composer *composer;
-
-	if (!new_state->crtc || !fb)
-		return;
-
-	vkms_plane_state = to_vkms_plane_state(new_state);
-	shadow_plane_state = &vkms_plane_state->base;
-
-	composer = vkms_plane_state->composer;
-	memcpy(&composer->src, &new_state->src, sizeof(struct drm_rect));
-	memcpy(&composer->dst, &new_state->dst, sizeof(struct drm_rect));
-	memcpy(&composer->fb, fb, sizeof(struct drm_framebuffer));
-	memcpy(&composer->map, &shadow_plane_state->data, sizeof(composer->map));
-	drm_framebuffer_get(&composer->fb);
-	composer->offset = fb->offsets[0];
-	composer->pitch = fb->pitches[0];
-	composer->cpp = fb->format->cpp[0];
-}
-
-static int vkms_plane_atomic_check(struct drm_plane *plane,
-				   struct drm_atomic_state *state)
-{
-	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
-										 plane);
-	struct drm_crtc_state *crtc_state;
-	bool can_position = false;
-	int ret;
-
-	if (!new_plane_state->fb || WARN_ON(!new_plane_state->crtc))
-		return 0;
-
-	crtc_state = drm_atomic_get_crtc_state(state,
-					       new_plane_state->crtc);
-	if (IS_ERR(crtc_state))
-		return PTR_ERR(crtc_state);
-
-	if (plane->type != DRM_PLANE_TYPE_PRIMARY)
-		can_position = true;
-
-	ret = drm_atomic_helper_check_plane_state(new_plane_state, crtc_state,
-						  DRM_PLANE_HELPER_NO_SCALING,
-						  DRM_PLANE_HELPER_NO_SCALING,
-						  can_position, true);
-	if (ret != 0)
-		return ret;
-
-	/* for now primary plane must be visible and full screen */
-	if (!new_plane_state->visible && !can_position)
-		return -EINVAL;
-
-	return 0;
-}
-
-static const struct drm_plane_helper_funcs vkms_primary_helper_funcs = {
-	.atomic_update		= vkms_plane_atomic_update,
-	.atomic_check		= vkms_plane_atomic_check,
-	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
-};
 
 struct prism_plane *prism_plane_init(struct prism_device *pdev,
 				   enum drm_plane_type type, int index)

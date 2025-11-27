@@ -14,6 +14,7 @@ PWD  := $(shell pwd)
 ccflags-y := -Wall -Wextra -DDEBUG
 # 如果需要特定的 DRM 头文件路径
 ccflags-y += -I$(KDIR)/include/drm
+ccflags-y += -I /home/prism/linux/drivers/gpu/drm/prism
 
 # 防止 modpost 警告
 KBUILD_MODPOST_WARN=1

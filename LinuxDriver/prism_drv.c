@@ -17,6 +17,7 @@
 #include <drm/drm_aperture.h>
 #include <drm/drm_fb_helper.h>
 
+#include "prism_drv.h"
 
 static const struct drm_plane_funcs prism_primary_funcs = {
     .update_plane = drm_atomic_helper_update_plane,
@@ -36,7 +37,36 @@ static const struct drm_crtc_funcs prism_crtc_funcs = {
     .atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
 };
 
+static void prism_crtc_atomic_flush(struct drm_crtc *crtc,
+                                    struct drm_atomic_state *state)
+{
+    struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+    struct drm_device *dev = crtc->dev;
+    unsigned long flags;
+
+    // 1. 检查是否有待处理的事件
+    if (crtc_state->event) {
+        
+        // 2. 获取自旋锁 (因为事件发送通常设计为在中断上下文中运行，需要保护)
+        spin_lock_irqsave(&dev->event_lock, flags);
+
+        // 3. 发送事件告诉用户空间“这种子完成了”
+        // 注意：如果是真实硬件，这里通常只把 event 存起来，等到 VBLANK 中断来了再发送
+        // 但对于虚拟/简单硬件，我们假装 VBLANK 已经发生了，直接发送。
+        if (drm_crtc_vblank_get(crtc) == 0)
+            drm_crtc_send_vblank_event(crtc, crtc_state->event);
+        else
+            drm_crtc_send_vblank_event(crtc, crtc_state->event); // 即使 vblank get 失败也得发，防止死锁
+
+        spin_unlock_irqrestore(&dev->event_lock, flags);
+
+        // 4. 重要！一定要把指针置空，告诉内核“我处理完了”
+        crtc_state->event = NULL;
+    }
+}
+
 static const struct drm_crtc_helper_funcs prism_crtc_helper_funcs = {
+    .atomic_flush
 };
 
 static const struct drm_mode_config_funcs prism_mode_config_funcs = {
@@ -93,8 +123,6 @@ static const struct drm_connector_funcs prism_conn_funcs = {
     .atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
     .atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
-
-
 
 
 DEFINE_DRM_GEM_FOPS(prism_fops);
