@@ -80,6 +80,32 @@ static int prism_plane_atomic_check(struct drm_plane *plane,
                                                   false, true);
 }
 
+static int prism_plane_prepare_fb(struct drm_plane *plane,
+                                  struct drm_plane_state *new_state)
+{
+    struct drm_gem_object *obj = new_state->fb->obj[0];
+    struct prism_bo *bo = to_prism_bo(obj);
+    int ret;
+
+    if (!bo) return 0;
+
+    /* 核心魔法：把数据从系统内存搬运到 64MB VRAM 中！ */
+    ret = prism_bo_pin(bo, PRISM_PL_FLAG_VRAM);
+    if (ret) return ret;
+
+    /* 记录 VRAM 里的偏移量，方便 atomic_update 写寄存器 */
+    // bo->tbo.resource->start 是 page index，需要左移转换为地址
+    // 假设 VRAM 物理基地址是 pdev->vram_base
+    u64 vram_offset = bo->tbo.resource->start << PAGE_SHIFT;
+    
+    // 你可以在 plane_state 里加个字段存这个地址
+    // 或者直接在这里算好物理地址
+    // dma_addr_t paddr = pdev->vram_base + vram_offset;
+    
+    return 0;
+}
+
+
 static const struct drm_plane_helper_funcs prism_primary_helper_funcs = {
     .prepare_fb = drm_gem_vram_plane_helper_prepare_fb,
     .cleanup_fb = drm_gem_vram_plane_helper_cleanup_fb,
@@ -90,6 +116,7 @@ static const struct drm_plane_helper_funcs prism_primary_helper_funcs = {
 static const struct drm_plane_funcs prism_plane_funcs = {
     .update_plane = drm_atomic_helper_update_plane,
     .disable_plane = drm_atomic_helper_disable_plane,
+    .destroy = drm_mode_config_cleanup,
     .reset = drm_atomic_helper_plane_reset,
     .atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
     .atomic_destroy_state = drm_atomic_helper_plane_destroy_state,

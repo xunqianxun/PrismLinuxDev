@@ -19,14 +19,6 @@
 
 #include "prism_drv.h"
 
-static const struct drm_plane_funcs prism_primary_funcs = {
-    .update_plane = drm_atomic_helper_update_plane,
-    .disable_plane = drm_atomic_helper_disable_plane,
-    .destroy = drm_plane_cleanup,
-    .reset = drm_atomic_helper_plane_reset,
-    .atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
-    .atomic_destroy_state = drm_atomic_helper_plane_destroy_state,
-};
 
 static const struct drm_crtc_funcs prism_crtc_funcs = {
     .reset = drm_atomic_helper_crtc_reset,
@@ -36,6 +28,31 @@ static const struct drm_crtc_funcs prism_crtc_funcs = {
     .atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
     .atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
 };
+
+static int prism_crtc_atomic_check(struct drm_crtc *crtc,
+				  struct drm_atomic_state *state){
+
+    
+
+}
+
+static void prism_crtc_atomic_enable(struct drm_crtc *crtc,
+				    struct drm_atomic_state *state)
+{
+	drm_crtc_vblank_on(crtc);
+}
+
+static void prism_crtc_atomic_disable(struct drm_crtc *crtc,
+				     struct drm_atomic_state *state)
+{
+	drm_crtc_vblank_off(crtc);
+}
+
+static void prism_crtc_atomic_begin(struct drm_crtc *crtc,
+				   struct drm_atomic_state *state)
+{
+	
+}
 
 static void prism_crtc_atomic_flush(struct drm_crtc *crtc,
                                     struct drm_atomic_state *state)
@@ -56,7 +73,7 @@ static void prism_crtc_atomic_flush(struct drm_crtc *crtc,
         if (drm_crtc_vblank_get(crtc) == 0)
             drm_crtc_send_vblank_event(crtc, crtc_state->event);
         else
-            drm_crtc_send_vblank_event(crtc, crtc_state->event); // 即使 vblank get 失败也得发，防止死锁
+            drm_crtc_arm_vblank_event(crtc, crtc->state->event);
 
         spin_unlock_irqrestore(&dev->event_lock, flags);
 
@@ -66,7 +83,10 @@ static void prism_crtc_atomic_flush(struct drm_crtc *crtc,
 }
 
 static const struct drm_crtc_helper_funcs prism_crtc_helper_funcs = {
-    .atomic_flush
+	.atomic_begin	= prism_crtc_atomic_begin,
+	.atomic_flush	= prism_crtc_atomic_flush,
+	.atomic_enable	= prism_crtc_atomic_enable,
+	.atomic_disable	= prism_crtc_atomic_disable,
 };
 
 static const struct drm_mode_config_funcs prism_mode_config_funcs = {
@@ -75,10 +95,6 @@ static const struct drm_mode_config_funcs prism_mode_config_funcs = {
     .atomic_commit = drm_atomic_helper_commit,
 };
 
-/* ------------------------------------------------------------------
- * 3. [FIXED] Connector 实现 (关键修复)
- * ------------------------------------------------------------------
- */
 
 /* * 这个函数非常关键！它告诉内核你的虚拟显示器支持什么分辨率。
  * 如果没有这个函数，Modsetting 会失败，驱动加载时会报错。
@@ -125,17 +141,27 @@ static const struct drm_connector_funcs prism_conn_funcs = {
 };
 
 
-DEFINE_DRM_GEM_FOPS(prism_fops);
+static const struct file_operations prism_fops = {
+		.owner		= THIS_MODULE,
+		.open		= drm_open,
+		.release	= drm_release,
+		.unlocked_ioctl	= drm_ioctl,
+		.compat_ioctl	= drm_compat_ioctl,
+		.poll		= drm_poll,
+		.read		= drm_read,
+		.llseek		= noop_llseek,
+		.mmap		= prism_gem_mmap,
+	}
 
 static struct drm_driver prism_driver = {
-    .driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_RENDER,
+    .driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC ,
     .fops = &prism_fops,
     .name = "prism-drm",
     .desc = "Prism Educational GPU",
     .date = "20251123",
     .major = 1, 
     .minor = 0,
-    .dumb_create = drm_gem_vram_driver_dumb_create,
+    .dumb_create = prism_gem_dumb_create,
 };
 
 
@@ -184,11 +210,10 @@ static int prism_modeset_init(struct prism_device *pdev)
     crtc = devm_kzalloc(dev->dev, sizeof(*crtc), GFP_KERNEL);
     if (!crtc) return -ENOMEM;
 
-    /* 使用基础初始化函数，显式传递名称 "crtc-0" 防止 NULL 崩溃 */
     ret = drm_crtc_init_with_planes(dev, crtc,
                                     primary, cursor, 
                                     &prism_crtc_funcs,
-                                    "crtc-0");
+                                    NULL);
     if (ret) {
         DRM_ERROR("Failed to init CRTC\n");
         return ret;
@@ -258,18 +283,20 @@ static int prism_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent
     resource_size_t vram_base = pci_resource_start(pdev, 0);
     resource_size_t vram_len = pci_resource_len(pdev, 0);
 
-    /* [FIXED] 增加基本的校验，防止 BAR 0 没配置导致恐慌 */
-    if (vram_len == 0) {
-        DRM_ERROR("VRAM size is 0, check QEMU device definition\n");
-        return -ENODEV;
+    /* 2. 映射 VRAM 到内核空间 (为了 io_mem_reserve 的静态映射优化) 可有可无 */
+    prism->vram_virt = devm_ioremap_wc(&pdev->dev, vram_base, vram_len);
+    if (!prism->vram_virt) {
+        DRM_ERROR("Failed to map VRAM\n");
+        return -ENOMEM;
     }
 
-    ret = drmm_vram_helper_init(ddev, vram_base, vram_len);
+    /* 3. 初始化你自己写的 TTM 后端 (替换掉 drmm_vram_helper_init) */
+    /* 这里的 prism_ttm_init 就是你刚才写在 prism_ttm.c 里的函数 */
+    ret = prism_ttm_init(prism); 
     if (ret) {
-        DRM_ERROR("Failed to init VRAM MM: %d\n", ret);
+        DRM_ERROR("Failed to init Custom TTM: %d\n", ret);
         return ret;
     }
-
     /* 4. Modeset Init */
     ret = prism_modeset_init(prism);
     if (ret) return ret;
