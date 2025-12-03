@@ -22,6 +22,7 @@ ISO_DIR ?= ubuntu-20.04.6-desktop-amd64.iso
 # img and ios path
 # this is build by image name same as your iso name
 IMG_DIR ?= ubuntu-20.04.6-desktop-amd64.img
+GIMG_DIR = gdb-$(IMG_DIR)
 
 # Source use
 INSERT_KCONFIG := $(QEMU_DIR)/hw/misc/Kconfig
@@ -32,7 +33,8 @@ SRC_MESON := Scripts/meson.build
 QEMU_BIN = $(QEMU_DIR)/build/qemu-system-x86_64
 #support virtfs you can share the host file system with the vm
 # eg:    mkdir -p path/shared
-#        sudo mount -t 9p -o trans=virtio,version=9p2000.L host0 LinuxDriver"
+#        sudo mount -t 9p -o trans=virtio,version=9p2000.L host0 path/shared"
+#now i usw s: sudo mount -t 9p -o trans=virtio,version=9p2000.L host0 ~/linux/drivers/gpu/drm/prism/
 QEMU_FLAGS  = -virtfs local,path=LinuxDriver,mount_tag=host0,security_model=passthrough,id=host0
 QEMU_FLAGS += -hda $(IMG_DIR) -boot d -enable-kvm -machine q35 
 QEMU_FLAGS += -device intel-iommu -smp $(CORES),sockets=1,cores=$(shell echo $$(($(CORES)/2))) -m $(MEMORY)
@@ -42,9 +44,7 @@ QEMU_FLAGS += -net nic,model=e1000
 QEMU_FLAGS += -usbdevice tablet
 QEMU_FLAGS += -device prism-sim
 
-#ifeq ($(DEBUG), 1)
-#QEMU_FLAGS += -D $(LOGFILE)
-#endif 
+ 
 
 ifeq ($(BOOT), 1)
 QEMU_FLAGS +=  -cdrom $(ISO_DIR)
@@ -52,7 +52,7 @@ endif
 
 image:
 	@echo "Creating QEMU disk image: $(IMG_DIR)"
-	@$(QEMU_DIR)/build/qemu-img create -f qcow2 $(IMG_DIR) 40G
+	@$(QEMU_DIR)/build/qemu-img create -f qcow2 $(IMG_DIR) 80G
 
 source:
 	@echo "Inserting PrismGPU source code into QEMU source files"
@@ -70,7 +70,7 @@ source:
 pre: source image
 
 qemuconfig:
-ifeq ($(DEBUG),1)
+ifeq ($(DEBUG),qemu)
 	@echo "Configuring QEMU with debug options"
 	@cd $(QEMU_DIR) && mkdir -p build && cd build && ../configure --enable-kvm \
 													 --target-list=x86_64-softmmu \
@@ -97,10 +97,14 @@ qemubuild:
 # qemu compiler and build 
 qemu: qemuconfig qemubuild
 
-#running qemu
+#running qemu 
 run:
 	@echo "Starting QEMU"
-	@$(QEMU_BIN) $(QEMU_FLAGS) -display gtk &
+#ifeq ($(DEBUG),linux)
+#	@$(QEMU_BIN) $(QEMU_FLAGS) -display gtk &
+#else 
+	@$(QEMU_BIN) $(QEMU_FLAGS) -display gtk -vga none &
+#endif
 
 
 .PHONY: clean

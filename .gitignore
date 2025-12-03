@@ -13,6 +13,7 @@ compile_commands.json
 *.img
 *.bin
 *.log
+ImgHistory/
 
 # Build results
 [Dd]ebug/
